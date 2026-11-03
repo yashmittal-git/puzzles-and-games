@@ -1,0 +1,209 @@
+import { FilesetResolver, PoseLandmarker } from './vision_bundle.mjs';
+
+const TARGETS = [5, 10, 15, 20];
+let target = 10;
+let phase = 'setup'; // setup | loading | playing | won
+let reps = 0;
+let landmarker = null;
+let stream = null;
+let camState = 'pending'; // pending | on | unavailable
+let wakeLock = null;
+
+const $ = (id) => document.getElementById(id);
+const video = $('video');
+const canvas = $('stage');
+const ctx2d = canvas.getContext('2d');
+
+// ---------- buzzer ----------
+let audioCtx = null, beepTimer = null;
+function startBuzzer() {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    audioCtx.resume();
+    let high = true;
+    const beep = () => {
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.frequency.value = high ? 880 : 660;
+        gain.gain.setValueAtTime(0.18, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.28);
+        osc.connect(gain).connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.3);
+        high = !high;
+    };
+    beep();
+    beepTimer = setInterval(beep, 320);
+}
+function stopBuzzer() { if (beepTimer) { clearInterval(beepTimer); beepTimer = null; } }
+
+// ---------- rep counter (mirrors the algorithm validated offline on real push-up videos) ----------
+const counter = {
+    ema: null, recentMax: 0, state: 'UP', lastRepAt: -1e9, plankSince: null, lastSampleAt: null,
+    angle(ax, ay, bx, by, cx, cy) {
+        const bax = ax - bx, bay = ay - by, bcx = cx - bx, bcy = cy - by;
+        const cos = (bax * bcx + bay * bcy) / ((Math.hypot(bax, bay) * Math.hypot(bcx, bcy)) + 1e-9);
+        return Math.acos(Math.max(-1, Math.min(1, cos))) * 180 / Math.PI;
+    },
+    sample(lm, now) {
+        const vis = (lm[13].visibility + lm[14].visibility + lm[15].visibility + lm[16].visibility) / 4;
+        const shX = (lm[11].x + lm[12].x) / 2, shY = (lm[11].y + lm[12].y) / 2;
+        const hipX = (lm[23].x + lm[24].x) / 2, hipY = (lm[23].y + lm[24].y) / 2;
+        const torso = Math.hypot(shX - hipX, shY - hipY) + 1e-9;
+        const horizontal = Math.abs(shY - hipY) / torso <= 0.6;
+        if (vis < 0.5 || !horizontal) { this.plankSince = null; return false; }
+        if (this.plankSince === null) this.plankSince = now;
+        const el = (this.angle(lm[11].x, lm[11].y, lm[13].x, lm[13].y, lm[15].x, lm[15].y) +
+                    this.angle(lm[12].x, lm[12].y, lm[14].x, lm[14].y, lm[16].x, lm[16].y)) / 2;
+        this.ema = this.ema === null ? el : this.ema * 0.5 + el * 0.5;
+        const dt = this.lastSampleAt === null ? 0.033 : Math.min(0.2, (now - this.lastSampleAt) / 1000);
+        this.lastSampleAt = now;
+        this.recentMax = Math.max(this.ema, this.recentMax * Math.pow(0.94, dt));
+        if (now - this.plankSince < 400) return false;
+        if (this.state === 'UP' && this.ema < this.recentMax - 40) {
+            this.state = 'DOWN';
+        } else if (this.state === 'DOWN' && this.ema > this.recentMax - 12) {
+            this.state = 'UP';
+            if (now - this.lastRepAt > 600) { this.lastRepAt = now; return true; }
+        }
+        return false;
+    },
+    reset() { this.ema = null; this.recentMax = 0; this.state = 'UP'; this.lastRepAt = -1e9; this.plankSince = null; this.lastSampleAt = null; }
+};
+
+// ---------- flappy game ----------
+const game = { birdY: 150, birdV: 0, pipes: [], lastPipe: 0 };
+function flap() { game.birdV = -5.2; }
+
+function drawStage(now, poseLm) {
+    const W = canvas.width, H = canvas.height;
+    game.birdV += 0.32; game.birdY += game.birdV;
+    if (game.birdY > H - 20) { game.birdY = H - 20; game.birdV = -3; }
+    if (game.birdY < 10) { game.birdY = 10; game.birdV = 0; }
+    if (now - game.lastPipe > 2600) { game.lastPipe = now; game.pipes.push({ x: W + 20, gapY: 60 + Math.random() * (H - 160) }); }
+    game.pipes.forEach(p => p.x -= 1.6);
+    game.pipes = game.pipes.filter(p => p.x > -60);
+
+    ctx2d.clearRect(0, 0, W, H);
+    const gapH = 110;
+    ctx2d.fillStyle = '#2f9e44';
+    game.pipes.forEach(p => {
+        ctx2d.fillRect(p.x, 0, 34, p.gapY - gapH / 2);
+        ctx2d.fillRect(p.x, p.gapY + gapH / 2, 34, H);
+        ctx2d.fillRect(p.x - 4, p.gapY - gapH / 2 - 14, 42, 14);
+        ctx2d.fillRect(p.x - 4, p.gapY + gapH / 2, 42, 14);
+    });
+    ctx2d.save();
+    ctx2d.translate(56, game.birdY);
+    ctx2d.rotate(Math.max(-0.4, Math.min(0.7, game.birdV * 0.08)));
+    ctx2d.fillStyle = '#ffde59'; ctx2d.fillRect(-10, -8, 20, 16);
+    ctx2d.fillStyle = '#f4a63b'; ctx2d.fillRect(-14, -4, 8, 8);
+    ctx2d.fillStyle = '#251f21'; ctx2d.fillRect(4, -5, 3, 3);
+    ctx2d.fillStyle = '#ed5b2d'; ctx2d.fillRect(10, -2, 6, 4);
+    ctx2d.restore();
+
+    // pose skeleton hint (shows the camera sees you)
+    if (poseLm) {
+        ctx2d.fillStyle = 'rgba(115,168,154,0.9)';
+        [11, 12, 13, 14, 15, 16, 23, 24].forEach(i => {
+            ctx2d.beginPath();
+            ctx2d.arc(poseLm[i].x * W, poseLm[i].y * H, 4, 0, 7);
+            ctx2d.fill();
+        });
+    }
+}
+
+// ---------- main loop ----------
+let raf = 0;
+function loop(now) {
+    if (phase !== 'playing') return;
+    let poseLm = null;
+    if (camState === 'on' && landmarker && video.readyState >= 2) {
+        try {
+            const res = landmarker.detectForVideo(video, now);
+            poseLm = res.landmarks && res.landmarks[0];
+            if (poseLm && counter.sample(poseLm, now)) countRep();
+        } catch (e) { /* skip frame */ }
+    }
+    drawStage(now, poseLm);
+    raf = requestAnimationFrame(loop);
+}
+
+function countRep() {
+    reps += 1;
+    $('repcount').textContent = reps + ' / ' + target + ' push-ups';
+    flap();
+    if (reps >= target) {
+        stopBuzzer();
+        phase = 'won';
+        cancelAnimationFrame(raf);
+        $('winbanner').style.display = 'flex';
+        $('tapbtn').style.display = 'none';
+        $('stopbtn').style.display = 'none';
+        $('againbtn').style.display = '';
+        $('phaseLabel').textContent = 'Alarm off';
+    }
+}
+
+// ---------- flow ----------
+async function start() {
+    reps = 0; counter.reset();
+    game.pipes = []; game.lastPipe = 0; game.birdY = 150; game.birdV = 0;
+    $('repcount').textContent = '0 / ' + target + ' push-ups';
+    $('winbanner').style.display = 'none';
+    $('tapbtn').style.display = '';
+    $('stopbtn').style.display = '';
+    $('againbtn').style.display = 'none';
+    $('phaseLabel').textContent = 'Alarm ringing';
+    $('setupView').style.display = 'none';
+    $('playView').style.display = '';
+    phase = 'playing';
+    startBuzzer();
+    if (navigator.wakeLock) { navigator.wakeLock.request('screen').then(w => wakeLock = w).catch(() => {}); }
+    if (!landmarker) {
+        $('camnote').textContent = 'Loading pose model…';
+        try {
+            const files = await FilesetResolver.forVisionTasks('./wasm');
+            landmarker = await PoseLandmarker.createFromOptions(files, {
+                baseOptions: { modelAssetPath: './pose_landmarker_lite.task' },
+                runningMode: 'VIDEO', numPoses: 1,
+                minPoseDetectionConfidence: 0.5, minTrackingConfidence: 0.5
+            });
+        } catch (e) {
+            $('camnote').textContent = 'Pose model failed to load; tap button counts reps.';
+        }
+    }
+    try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false });
+        video.srcObject = stream;
+        await video.play().catch(() => {});
+        camState = 'on';
+        $('camnote').textContent = landmarker ? 'Camera counting on. Do a push-up; each full rep flies the bird.' : '';
+    } catch (e) {
+        camState = 'unavailable';
+        $('camnote').textContent = 'Camera not available or blocked, so the tap button counts reps.';
+    }
+    cancelAnimationFrame(raf);
+    raf = requestAnimationFrame(loop);
+}
+
+function stopAll() {
+    stopBuzzer();
+    phase = 'setup';
+    cancelAnimationFrame(raf);
+    if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+    if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
+    $('setupView').style.display = '';
+    $('playView').style.display = 'none';
+}
+
+$('startbtn').addEventListener('click', start);
+$('againbtn').addEventListener('click', start);
+$('stopbtn').addEventListener('click', stopAll);
+$('tapbtn').addEventListener('click', countRep);
+document.querySelectorAll('.chip').forEach(btn => {
+    btn.addEventListener('click', () => {
+        document.querySelectorAll('.chip').forEach(b => b.classList.remove('on'));
+        btn.classList.add('on');
+        target = parseInt(btn.dataset.n, 10);
+    });
+});
