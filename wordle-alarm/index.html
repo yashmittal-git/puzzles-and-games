@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Daily Word Alarm Demo - Circuit</title>
+<link rel="icon" href="data:,">
+<style>
+  :root { --ink:#251f21; --ink2:#585254; --hairline:#eae9ea; --teal:#73a89a; --sand:#f4efec;
+          --green:#538d4e; --yellow:#b59f3b; --gray:#787c7e; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--sand); color:var(--ink);
+         font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width:460px; margin:0 auto; padding:24px 20px 40px; background:#fff; min-height:100vh; }
+  h1 { font-size:26px; margin:0 0 6px; }
+  .sub { color:var(--ink2); font-size:13px; margin:0 0 16px; }
+  p { font-size:15px; line-height:1.5; }
+  button.big { display:block; width:100%; min-height:48px; margin:10px 0; border:0; border-radius:8px;
+          background:var(--ink); color:#fff; font:inherit; font-size:16px; font-weight:600; cursor:pointer; }
+  button.ghost { background:#fff; color:var(--ink); border:1px solid var(--hairline); }
+  .note { background:var(--sand); border-radius:8px; padding:12px 14px; font-size:14px; line-height:1.5; margin:12px 0; }
+  .board { display:grid; grid-template-rows:repeat(6,1fr); gap:5px; width:min(320px,86vw); margin:10px auto 14px; }
+  .row { display:grid; grid-template-columns:repeat(5,1fr); gap:5px; }
+  .tile { aspect-ratio:1; border:2px solid var(--hairline); display:flex; align-items:center; justify-content:center;
+          font-size:26px; font-weight:700; text-transform:uppercase; user-select:none;
+          transition:transform .12s; }
+  .tile.filled { border-color:#878a8c; }
+  .tile.pop { transform:scale(1.08); }
+  .tile.flip { animation:flip .45s ease; }
+  @keyframes flip { 0%{transform:rotateX(0)} 50%{transform:rotateX(90deg)} 100%{transform:rotateX(0)} }
+  .tile.green { background:var(--green); border-color:var(--green); color:#fff; }
+  .tile.yellow { background:var(--yellow); border-color:var(--yellow); color:#fff; }
+  .tile.gray { background:var(--gray); border-color:var(--gray); color:#fff; }
+  .row.shake { animation:shake .5s; }
+  @keyframes shake { 0%,100%{transform:translateX(0)} 20%,60%{transform:translateX(-8px)} 40%,80%{transform:translateX(8px)} }
+  .kb { width:100%; max-width:420px; margin:0 auto; }
+  .kbrow { display:flex; gap:5px; justify-content:center; margin-bottom:6px; }
+  .key { flex:1; min-height:52px; border:0; border-radius:5px; background:#d3d6da; color:var(--ink);
+         font:inherit; font-size:14px; font-weight:700; cursor:pointer; text-transform:uppercase; padding:0; }
+  .key.wide { flex:1.6; font-size:12px; }
+  .key.green { background:var(--green); color:#fff; }
+  .key.yellow { background:var(--yellow); color:#fff; }
+  .key.gray { background:var(--gray); color:#fff; }
+  #msg { text-align:center; min-height:22px; font-weight:600; font-size:14px; margin:6px 0; color:var(--ink); }
+  .win { text-align:center; font-size:20px; font-weight:700; color:var(--green); margin:10px 0; display:none; }
+  .foot { color:var(--ink2); font-size:12px; margin-top:20px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Daily word alarm demo</h1>
+  <p class="sub">Circuit build · unofficial Wordle-style game · a new word every day at midnight IST</p>
+
+  <div id="setupView">
+    <p>Press start. The buzzer rings until you solve today's word. Six guesses, green/yellow/gray, same rules as the real thing. The word changes every day at midnight IST, picked from our own built-in list.</p>
+    <button class="big" id="startbtn">Start the alarm</button>
+    <div class="note"><strong>Demo, not a real alarm.</strong> It works only while this page is open and the screen is on - it cannot wake a locked phone. This is our own word game, not the official NYT Wordle; each daily word is independently selected from our own list and is not synced with NYT. Everything runs on this device; nothing is uploaded.</div>
+  </div>
+
+  <div id="playView" style="display:none">
+    <p class="sub" id="phaseLabel">Alarm ringing - solve the word</p>
+    <p class="sub" id="dateLabel" style="margin-top:-8px"><strong></strong></p>
+    <div class="board" id="board"></div>
+    <div id="msg"></div>
+    <div class="win" id="winbanner">Alarm off. You're up.</div>
+    <div class="kb" id="kb"></div>
+    <button class="big ghost" id="stopbtn">Stop</button>
+    <button class="big" id="againbtn" style="display:none">Ring it again</button>
+  </div>
+
+  <p class="foot">The word list and coloring run entirely on this device. Not affiliated with Wordle or the New York Times.</p>
+</main>
+<script type="module" src="./app.js"></script>
+</body>
+</html>

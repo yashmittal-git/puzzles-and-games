@@ -36,38 +36,62 @@ function startBuzzer() {
 }
 function stopBuzzer() { if (beepTimer) { clearInterval(beepTimer); beepTimer = null; } }
 
-// ---------- rep counter (mirrors the algorithm validated offline on real push-up videos) ----------
+// ---------- rep counter: dual-signal (side-on elbow angle OR front-on shoulder height) ----------
 const counter = {
-    ema: null, recentMax: 0, state: 'UP', lastRepAt: -1e9, plankSince: null, lastSampleAt: null,
+    lastRepAt: -1e9, plankSince: null, lastSampleAt: null, lastPickAt: 0, dominant: 'elbow',
+    elbow: { ema: null, hi: null, lo: null, state: 'UP' },       // side-on: elbow angle, extended = high
+    shoulder: { ema: null, hi: null, lo: null, state: 'UP' },    // front-on: shoulder height, lowered body = high y
     angle(ax, ay, bx, by, cx, cy) {
         const bax = ax - bx, bay = ay - by, bcx = cx - bx, bcy = cy - by;
         const cos = (bax * bcx + bay * bcy) / ((Math.hypot(bax, bay) * Math.hypot(bcx, bcy)) + 1e-9);
         return Math.acos(Math.max(-1, Math.min(1, cos))) * 180 / Math.PI;
     },
+    track(sig, value, dt, drift) {
+        sig.ema = sig.ema === null ? value : sig.ema * 0.5 + value * 0.5;
+        sig.hi = sig.hi === null ? sig.ema : Math.max(sig.ema, sig.hi - drift * dt);
+        sig.lo = sig.lo === null ? sig.ema : Math.min(sig.ema, sig.lo + drift * dt);
+    },
     sample(lm, now) {
-        const vis = (lm[13].visibility + lm[14].visibility + lm[15].visibility + lm[16].visibility) / 4;
-        const shX = (lm[11].x + lm[12].x) / 2, shY = (lm[11].y + lm[12].y) / 2;
-        const hipX = (lm[23].x + lm[24].x) / 2, hipY = (lm[23].y + lm[24].y) / 2;
-        const torso = Math.hypot(shX - hipX, shY - hipY) + 1e-9;
-        const horizontal = Math.abs(shY - hipY) / torso <= 0.6;
-        if (vis < 0.5 || !horizontal) { this.plankSince = null; return false; }
+        const vis = (lm[11].visibility + lm[12].visibility + lm[13].visibility + lm[14].visibility +
+                     lm[15].visibility + lm[16].visibility) / 6;
+        if (vis < 0.5) { this.plankSince = null; return false; }
         if (this.plankSince === null) this.plankSince = now;
-        const el = (this.angle(lm[11].x, lm[11].y, lm[13].x, lm[13].y, lm[15].x, lm[15].y) +
-                    this.angle(lm[12].x, lm[12].y, lm[14].x, lm[14].y, lm[16].x, lm[16].y)) / 2;
-        this.ema = this.ema === null ? el : this.ema * 0.5 + el * 0.5;
         const dt = this.lastSampleAt === null ? 0.033 : Math.min(0.2, (now - this.lastSampleAt) / 1000);
         this.lastSampleAt = now;
-        this.recentMax = Math.max(this.ema, this.recentMax * Math.pow(0.94, dt));
+
+        const el = (this.angle(lm[11].x, lm[11].y, lm[13].x, lm[13].y, lm[15].x, lm[15].y) +
+                    this.angle(lm[12].x, lm[12].y, lm[14].x, lm[14].y, lm[16].x, lm[16].y)) / 2;
+        const e = this.elbow, s = this.shoulder;
+        this.track(e, el, dt, 30);                       // extremes drift 30 deg/s
+        this.track(s, (lm[11].y + lm[12].y) / 2, dt, 0.05); // extremes drift 0.05 frame/s
+
         if (now - this.plankSince < 400) return false;
-        if (this.state === 'UP' && this.ema < this.recentMax - 40) {
-            this.state = 'DOWN';
-        } else if (this.state === 'DOWN' && this.ema > this.recentMax - 12) {
-            this.state = 'UP';
-            if (now - this.lastRepAt > 600) { this.lastRepAt = now; return true; }
+
+        // one dominant signal counts; the other is tracked but cannot fire (prevents double counts)
+        if (now - this.lastPickAt > 500) {
+            this.lastPickAt = now;
+            this.dominant = (e.hi - e.lo) / 40 >= (s.hi - s.lo) / 0.06 ? 'elbow' : 'shoulder';
         }
+
+        let rep = false;
+        if (e.state === 'UP' && e.ema < e.hi - 40) e.state = 'DOWN';
+        else if (e.state === 'DOWN' && e.ema > e.hi - 12) { e.state = 'UP'; if (this.dominant === 'elbow') rep = true; }
+        if (s.state === 'UP' && s.ema > s.lo + 0.06) s.state = 'DOWN';
+        else if (s.state === 'DOWN' && s.ema < s.lo + 0.025) { s.state = 'UP'; if (this.dominant === 'shoulder') rep = true; }
+
+        if (rep && now - this.lastRepAt > 600) { this.lastRepAt = now; return true; }
         return false;
     },
-    reset() { this.ema = null; this.recentMax = 0; this.state = 'UP'; this.lastRepAt = -1e9; this.plankSince = null; this.lastSampleAt = null; }
+    debug() {
+        const e = this.elbow, s = this.shoulder;
+        return this.dominant + ' | elbow ' + (e.ema === null ? '-' : Math.round(e.ema) + '\u00b0') + ' ' + e.state +
+               ' | shoulderY ' + (s.ema === null ? '-' : s.ema.toFixed(3)) + ' ' + s.state;
+    },
+    reset() {
+        this.lastRepAt = -1e9; this.plankSince = null; this.lastSampleAt = null; this.lastPickAt = 0; this.dominant = 'elbow';
+        this.elbow = { ema: null, hi: null, lo: null, state: 'UP' };
+        this.shoulder = { ema: null, hi: null, lo: null, state: 'UP' };
+    }
 };
 
 // ---------- flappy game ----------
@@ -125,6 +149,8 @@ function loop(now) {
         } catch (e) { /* skip frame */ }
     }
     drawStage(now, poseLm);
+    const dbg = $('debug');
+    if (dbg && now - (loop.lastDbg || 0) > 200) { loop.lastDbg = now; dbg.textContent = counter.debug(); }
     raf = requestAnimationFrame(loop);
 }
 
@@ -159,29 +185,38 @@ async function start() {
     phase = 'playing';
     startBuzzer();
     if (navigator.wakeLock) { navigator.wakeLock.request('screen').then(w => wakeLock = w).catch(() => {}); }
+
+    camState = 'pending';
+    let modelReady = !!landmarker, modelFailed = false;
+    const renderNote = () => {
+        const cam = camState === 'on' ? 'Camera on.' : camState === 'unavailable' ? 'Camera not available or blocked, so the tap button counts reps.' : 'Starting camera\u2026';
+        const model = modelReady ? ' Pose model ready - counting on, side or front view.' :
+                      modelFailed ? ' Pose model failed to load; tap button counts reps.' : ' Loading pose model\u2026';
+        $('camnote').textContent = camState === 'unavailable' ? cam : cam + model;
+    };
+    renderNote();
+
     if (!landmarker) {
-        $('camnote').textContent = 'Loading pose model…';
-        try {
-            const files = await FilesetResolver.forVisionTasks('./wasm');
-            landmarker = await PoseLandmarker.createFromOptions(files, {
-                baseOptions: { modelAssetPath: './pose_landmarker_lite.task' },
-                runningMode: 'VIDEO', numPoses: 1,
-                minPoseDetectionConfidence: 0.5, minTrackingConfidence: 0.5
-            });
-        } catch (e) {
-            $('camnote').textContent = 'Pose model failed to load; tap button counts reps.';
-        }
+        (async () => {
+            try {
+                const files = await FilesetResolver.forVisionTasks('./wasm');
+                landmarker = await PoseLandmarker.createFromOptions(files, {
+                    baseOptions: { modelAssetPath: './pose_landmarker_lite.task' },
+                    runningMode: 'VIDEO', numPoses: 1,
+                    minPoseDetectionConfidence: 0.5, minTrackingConfidence: 0.5
+                });
+                modelReady = true;
+            } catch (e) { modelFailed = true; }
+            if (phase === 'playing') renderNote();
+        })();
     }
     try {
         stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false });
         video.srcObject = stream;
         await video.play().catch(() => {});
         camState = 'on';
-        $('camnote').textContent = landmarker ? 'Camera counting on. Do a push-up; each full rep flies the bird.' : '';
-    } catch (e) {
-        camState = 'unavailable';
-        $('camnote').textContent = 'Camera not available or blocked, so the tap button counts reps.';
-    }
+    } catch (e) { camState = 'unavailable'; }
+    if (phase === 'playing') renderNote();
     cancelAnimationFrame(raf);
     raf = requestAnimationFrame(loop);
 }

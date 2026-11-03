@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Push-up Alarm Demo - Circuit</title>
+<link rel="icon" href="data:,">
+<style>
+  :root { --ink:#251f21; --ink2:#585254; --hairline:#eae9ea; --teal:#73a89a; --sand:#f4efec; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--sand); color:var(--ink);
+         font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width:460px; margin:0 auto; padding:24px 20px 40px; background:#fff; min-height:100vh; }
+  h1 { font-size:26px; margin:0 0 6px; }
+  .sub { color:var(--ink2); font-size:13px; margin:0 0 16px; }
+  p { font-size:15px; line-height:1.5; }
+  .chips { display:flex; gap:10px; margin:14px 0; flex-wrap:wrap; }
+  .chip { min-width:56px; min-height:44px; border:1px solid var(--hairline); border-radius:6px;
+          background:#fff; font:inherit; font-size:16px; cursor:pointer; }
+  .chip.on { border-color:var(--teal); color:var(--teal); font-weight:700; }
+  button.big { display:block; width:100%; min-height:48px; margin:10px 0; border:0; border-radius:8px;
+          background:var(--ink); color:#fff; font:inherit; font-size:16px; font-weight:600; cursor:pointer; }
+  button.ghost { background:#fff; color:var(--ink); border:1px solid var(--hairline); }
+  .stage { position:relative; width:100%; aspect-ratio:6/5; border-radius:12px; overflow:hidden; background:#101012; }
+  .stage video { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; transform:scaleX(-1); }
+  .stage canvas { position:absolute; inset:0; width:100%; height:100%; }
+  .win { position:absolute; inset:0; display:none; align-items:center; justify-content:center;
+         background:rgba(16,16,18,.55); color:#fff; font-size:22px; font-weight:700; text-align:center; padding:0 16px; }
+  .reprow { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:14px 0; }
+  #repcount { font-weight:700; font-size:17px; }
+  .note { background:var(--sand); border-radius:8px; padding:12px 14px; font-size:14px; line-height:1.5; margin:12px 0; }
+  #camnote { color:var(--ink2); font-size:13px; min-height:18px; margin:8px 0 0; }
+  .foot { color:var(--ink2); font-size:12px; margin-top:20px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Push-up alarm demo</h1>
+  <p class="sub">Circuit build · 3 Nov 2026 · inspired by the PushClock reel Rathish shared</p>
+
+  <div id="setupView">
+    <p>Pick a rep target and press start. The buzzer rings until the camera counts your push-ups - every full rep flies the bird through the pipes. Hit the target and the alarm stops.</p>
+    <div class="chips">
+      <button class="chip" data-n="5">5</button>
+      <button class="chip on" data-n="10">10</button>
+      <button class="chip" data-n="15">15</button>
+      <button class="chip" data-n="20">20</button>
+    </div>
+    <button class="big" id="startbtn">Start the alarm</button>
+    <div class="note"><strong>Demo, not a real alarm.</strong> It works only while this page is open and the screen is on - it cannot wake a locked phone. Prop the phone so the front camera sees your arms and shoulders, side or front. Front-on counting is a new fix - if a rep is missed, use the tap button and tell us. Counting runs on-device; no video leaves the phone.</div>
+  </div>
+
+  <div id="playView" style="display:none">
+    <p class="sub" id="phaseLabel">Alarm ringing</p>
+    <div class="stage">
+      <video id="video" playsinline muted autoplay></video>
+      <canvas id="stage" width="360" height="300"></canvas>
+      <div class="win" id="winbanner">Alarm off. You're up.</div>
+    </div>
+    <div class="reprow">
+      <span id="repcount">0 / 10 push-ups</span>
+      <button class="chip" id="tapbtn" title="Backup if the camera misses you">Tap = 1 rep</button>
+    </div>
+    <button class="big ghost" id="stopbtn">Stop</button>
+    <button class="big" id="againbtn" style="display:none">Ring it again</button>
+    <p id="camnote"></p>
+    <p id="debug" style="color:var(--ink2);font-size:12px;min-height:16px;margin:4px 0 0;font-family:ui-monospace,monospace"></p>
+  </div>
+
+  <p class="foot">Nothing is recorded or uploaded; pose detection runs entirely on this device. Tap button is a backup if the camera misses a rep.</p>
+</main>
+<script type="module" src="./app.js"></script>
+</body>
+</html>
